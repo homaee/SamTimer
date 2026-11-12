@@ -1,6 +1,7 @@
 package com.roottimer.app
 
 import android.content.Context
+import android.os.Build
 import android.os.Process
 import java.io.File
 import java.io.IOException
@@ -35,6 +36,69 @@ class RootService(private val context: Context) : IRootService.Stub() {
         private const val KSUD_STAGE_PATH = "/data/local/tmp/.ksud-stage"
         private const val TRACE_BUF = "/sys/kernel/tracing/buffer_size_kb"
         private const val INJECT_TIMEOUT_SEC = 420L
+
+        /* Devices whose offsets.h constants have been verified against a
+         * real vmlinux.  Add a model here only after completing the full
+         * re-derivation described in device_check.h. */
+        private val SUPPORTED_MODELS = setOf("SM-S921N")
+
+        /* Kernel version substring that must appear in /proc/version. */
+        private const val SUPPORTED_KERNEL = "6.1.162-android14-11"
+
+        /* Allow-token file read by the C layer (device_check.h). */
+        private const val DEVICE_ALLOW_FILE = "device.allowed"
+        private const val DEVICE_ALLOW_MAGIC = "SAMTIMER_OK:"
+    }
+
+    /**
+     * Device safety check — must pass before any exploit activity.
+     *
+     * Checks Build.MODEL against the verified-offset allow-list and verifies
+     * the running kernel version.  On pass, writes a one-use allow-token to
+     * WORK_DIR so the C binary can confirm device identity independently
+     * (device_check.h Layer 1).
+     *
+     * Returns null on pass, or a DEVICE_BLOCKED error string on failure.
+     * The caller must not proceed and must return a non-zero exit code.
+     */
+    private fun checkDeviceSafe(workDir: File): String? {
+        val model = Build.MODEL
+        val hardware = Build.HARDWARE
+
+        if (model !in SUPPORTED_MODELS) {
+            return "DEVICE_BLOCKED: device model \"$model\" is not in the " +
+                "supported list.\n" +
+                "Supported: ${SUPPORTED_MODELS.joinToString()}\n" +
+                "offsets.h was verified on SM-S921N (Exynos 2400) only. " +
+                "Running on \"$model\" will corrupt kernel memory and reboot " +
+                "the device.\n" +
+                "device info: model=$model hardware=$hardware\n" +
+                "To add support for \"$model\", re-derive all constants in " +
+                "offsets.h from that device's vmlinux. See device_check.h."
+        }
+
+        val kernelVersion = try {
+            File("/proc/version").readText().trim()
+        } catch (_: Exception) { "" }
+
+        if (SUPPORTED_KERNEL !in kernelVersion) {
+            return "DEVICE_BLOCKED: kernel version mismatch.\n" +
+                "running : \"$kernelVersion\"\n" +
+                "required: contains \"$SUPPORTED_KERNEL\"\n" +
+                "offsets.h was derived from $SUPPORTED_KERNEL; a different " +
+                "build invalidates every symbol address and struct offset."
+        }
+
+        // Write the one-use allow-token for the C layer (device_check.h Layer 1).
+        try {
+            File(workDir, DEVICE_ALLOW_FILE)
+                .writeText("$DEVICE_ALLOW_MAGIC$model:$hardware\n")
+        } catch (e: IOException) {
+            return "DEVICE_BLOCKED: could not write allow-token to $workDir " +
+                "(${e.message}). The C binary requires this file."
+        }
+
+        return null
     }
 
     override fun isReady(): Boolean {
@@ -100,6 +164,15 @@ class RootService(private val context: Context) : IRootService.Stub() {
             log(callback, "error: cannot create $WORK_DIR")
             return 1
         }
+
+        // Device safety check (primary gate): verify model and kernel before
+        // any staging or exploit launch.  On pass, writes device.allowed for
+        // the C binary's independent check (device_check.h).
+        checkDeviceSafe(workDir)?.let { reason ->
+            reason.lines().forEach { log(callback, it) }
+            return 1
+        }
+        log(callback, "device check passed (model=${Build.MODEL})")
         val ksud = File(workDir, "ksud")
         try {
             ksudSrc.copyTo(ksud, overwrite = true)

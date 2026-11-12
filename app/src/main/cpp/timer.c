@@ -78,6 +78,7 @@
 /* All kernel-build-specific constants (sites, cache sizes, struct offsets,
  * link-time symbols) live in offsets.h; only exploit tuning stays here. */
 #include "offsets.h"
+#include "device_check.h"
 
 /* (selinux_state / panic_on_warn / workqueue-UMH constants: offsets.h) */
 /* (umh struct layouts + ROOT_UMH_* page slots: offsets.h) */
@@ -3774,6 +3775,12 @@ int main(int argc, char **argv)
         return setksu_main();
     if (argc > 1 && !strcmp(argv[1], "--umh"))
         return setksu_main();
+
+    /* Device safety check: abort before any kernel writes if the running
+     * device/kernel does not match offsets.h.  Helper modes above are exempt
+     * (they run post-exploitation and do not use kernel symbol addresses). */
+    if (device_safety_check() != 0)
+        return 1;
 
     if (argc > 1 && !strcmp(argv[1], "shell"))
         shell_mode = 1;
