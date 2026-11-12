@@ -15,6 +15,16 @@ plugins {
 // manual build.
 // ─────────────────────────────────────────────────────────────────────────
 
+/* Device target for the payload binary.
+ * Pass -PtargetDevice=a556e to build for SM-A556E (Exynos 1480).
+ * Default: s921n (SM-S921N, Exynos 2400). */
+val targetDevice = (project.findProperty("targetDevice") as String? ?: "s921n").lowercase()
+val deviceFlag = when (targetDevice) {
+    "a556e" -> "-DTARGET_SM_A556E=1"
+    "s921n" -> "-DTARGET_SM_S921N=1"
+    else    -> throw GradleException("Unknown targetDevice='$targetDevice'. Use 's921n' or 'a556e'.")
+}
+
 fun ndkHome(): String? {
     val env = System.getenv("ANDROID_NDK_HOME")
     if (!env.isNullOrBlank()) return env
@@ -61,6 +71,7 @@ val buildPayload by tasks.registering(Exec::class) {
             cc,
             "-O2", "-std=gnu11", "-static",
             "-ffunction-sections", "-fdata-sections",
+            deviceFlag,
             src.absolutePath, "-o", out.absolutePath
         )
     }
